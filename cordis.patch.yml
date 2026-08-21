@@ -1,4 +1,8 @@
 # dsh-postapi-bridge 默认 patch 配置
-# 禁用官方可能冲突的默认 webauth，启用 postapi-bridge
+# 禁用官方默认可能冲突的 webauth，插入 postapi-bridge 服务
 - id: webauth
   disabled: true
+
+- insert:
+    - id: dsh-postapi-bridge
+      name: dsh-postapi-bridge
