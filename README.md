@@ -5,6 +5,20 @@
 
 ---
 
+## 🏗️ 前身与历史（承接 `mai_study_code`）
+
+本项目的缘起，与 `maibot_dsh_bridge` 一脉相承，同样承接自早期架构探索原型 —— **`mai_study_code`（麦麦学代码）**。
+
+- **前身定位**：为麦麦设计"目录式 + Web 可视化 + 自进化"的代码学习/编辑工作台，后演变为独立 Web 应用（AgentLoop + WebServer + Sandbox + SSE 事件总线），其架构与 DSH 相似度约 **70%~75%**。
+- **中断原因**：自造整套轮子（Agent 循环、Web 编辑器、沙盒、权限、持久化、事件流）维护负担过高，遂暂停。
+- **迁移验证**：经研究确认 **DSH** 的架构正是最初构想的那套，转而采用 DSH 作为承载底座。
+- **本项目角色**：`dsh-postapi-bridge` 是承接该构想、为外部系统/机器人开放 **DSH HTTP POST / RESTful API 调度网关** 的落地插件（客户端一侧配套 `maibot_dsh_bridge` 负责麦麦接入）。
+
+> 🔗 **前身仓库（已归档）**：https://github.com/ptrel1/mai_study_code.git  
+> 📖 该仓库 README 内含完整的架构对比、探索历史与归档说明。
+
+---
+
 ## ✨ 核心特性
 
 1. **零侵入架构（0-Diff）**：基于 DSH 标准扩展点开发，完全无需修改官方核心代码。
