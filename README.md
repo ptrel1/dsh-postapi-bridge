@@ -34,7 +34,8 @@
 
 ## ✨ 核心特性
 
-1. **零侵入架构（0-Diff）**：基于 DSH 标准扩展点开发，完全无需修改官方核心代码。
+1. **插件本体零侵入（0-Diff）**：登录页、多账号管理、机器 POST API 均基于 DSH 标准扩展点实现，**无需修改官方核心代码**。
+   > ⚠️ **但请注意**：若要在**公网部署**中强制「未登录用户禁止使用 DSH 核心功能」，因官方 webserver 架构未给 `/api` 前置登录鉴权留插件接入位，**需配合修改 DSH 源码**（见下方「🔐 公网账号系统」章节）。
 2. **人类 Web 通道**：
    - 优美自适应主题登录页（`/login` 与 `/logout`）；
    - 多账号独立权限与 Web 账号管理面板；
@@ -42,6 +43,19 @@
 3. **机器 POST API 通道**：
    - 为 **MaiBot（麦麦）/ 微信机器人 / 飞书 / CI/CD** 等外部系统提供免 Cookie 的纯 POST API；
    - 携带 `Authorization: Bearer <Token>` 或 `X-Gateway-Token` 即可跨域直通，无论是在容器内、公网域名还是内网反向代理，**永不受 127/Cookie 重定向限制**。
+
+---
+
+## 🔐 公网账号系统与 DSH 源码扩展点（重要）
+
+本插件保护的是「登录页 + 管理 API + 机器通道」，**无法保护官方 `/api/*` 核心 RPC**。DSH 官方把 `/api/*` 的信任边界定义在"谁能连到服务"（Host 头）而非"是否登录"，且 webserver **无中间件、路由防重复、RPC interceptor 拿不到 request**——纯插件无法在 `/api` 前置登录校验。
+
+因此，公网场景要实现「未登录禁止调用任何 DSH 核心功能」（发消息、执行命令、读写配置等），必须：
+1. **修改 DSH 源码**：在 `packages/client/connection/src/index.ts` 增加**默认关闭**的 `requireSession` 扩展点（不开启时与官方单用户行为完全一致）；
+2. **本插件提供实现**：`ctx.provide('sessionAuth', { isAuthenticated })` 返回鉴权判定。
+
+> 完整决策流程（仅本地 → 不改源码；公网 → 需改源码）、源码改动方案、git 维护与升级指导，见：
+> 🔒 `skill/public-network-auth-guide.md`
 
 ---
 
