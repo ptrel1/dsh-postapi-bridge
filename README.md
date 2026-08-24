@@ -104,3 +104,19 @@ dsh plugin --profile web add link:/main/app/github/dsh-postapi-bridge
 # 重启 DSH 服务生效
 supervisorctl restart dsh-web
 ```
+
+---
+
+## 🆚 与第三方远程控制插件（@linxin666/dsh-remote-web-ui）的区别
+
+- **设备配对 ≠ 用户登录**：`dsh-remote-web-ui` 的"设备配对"只是给**设备**发 cookie，管不住直连官方 `/api` 的请求（官方源码原话："没有插件能做到；`/api` 的围栏是 SDK 自己的接缝"）。
+- **配对会绕过本插件的登录门禁**：它把远程流量经 `/remote` 通道用 loopback 反向代理（伪造 `Host:127.0.0.1`）转回本机，`requireSession` 对 loopback 恒放行 → **配对成功即免登录全权限**。
+- **本部署取舍**：公网登录鉴权的唯一入口是 `requireSession`（源码级、fail-closed）；已在 profile patch 禁用 `web-ui-remote-web-ui`：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- id: web-ui-remote-web-ui
+  disabled: true
+```
+
+- 详细架构对比见 🔒 `skill/public-network-auth-guide.md` §七。

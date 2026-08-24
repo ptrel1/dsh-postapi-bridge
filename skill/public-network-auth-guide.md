@@ -293,7 +293,47 @@ git merge origin/master
 
 ---
 
-## 七、注意事项与风险
+## 七、与第三方远程控制插件（@linxin666/dsh-remote-web-ui）的区别与取舍
+
+> 场景：用户部署了 dsh-web 全家桶后，公网打开出现"设备配对/此设备未配对"封面。本文从架构上说明它和 `dsh-postapi-bridge` 的根本区别，以及为什么本部署选择**禁用**该插件。
+
+### 7.1 它"零侵入"的原理（对比 §二 为什么我们改源码）
+
+`@linxin666/dsh-remote-web-ui` 是纯插件（零侵入），手法：
+
+| 手法 | 说明 |
+| :--- | :--- |
+| `cordis.patch.yml` 仅 `- insert:` | 一行双半侧插件，不改任何官方文件 |
+| 路由全用**自己的前缀/精确路径** | `/api/pair/*` 用 **exact**（官方 webserver exact 优先于 `/api` prefix，不落入 connection）；`/remote`、`/m/api` 是**全新前缀**，与官方路由表不冲突 |
+| **loopback 反向代理（核心）** | 远程请求经插件通道进入后，插件在主机侧**重新发到 127.0.0.1:3080**（伪造 `Host:127.0.0.1` + `sec-fetch-site:same-origin`），官方 fence 视为 loopback 恒放行 |
+| 前端 | 官方插槽（sidebar 入口、QR 面板、封面页） |
+
+**它能零侵入的根本原因**：它 Gate 的是**自己新开的通道**（`/remote`、`/m/api`），代价是——**它管不住直连官方 `/api` 的请求**。官方源码原话：
+
+> "pairing does not gate `/api`（**没有插件能做到**；`/api` 的围栏是 SDK 自己的接缝）"
+
+对比：`dsh-postapi-bridge` 要守的是**官方已有的 `/api` 入口**，没有任何"新通道"可借，只能落 `client-connection` 源码（§三）。
+
+### 7.2 为什么不选它（本部署的取舍）
+
+1. **loopback 代理绕过 `requireSession`**：配对设备经 `/remote` 通道访问 `/api` 时是"本机身份"（Host=127.0.0.1），`requireSession` 对 loopback 恒放行 → **配对成功即免登录全权限**；
+2. **配对只管自己的通道**：直连 `/api` 的攻击者它拦不住（上节官方原话）；
+3. **双通道语义混淆**：设备配对（门禁卡）+ 用户登录（钥匙）叠加后，用户会误以为"配对了=安全"，实则 `/api` 仍可绕过；
+4. 本插件（`dsh-postapi-bridge`）本身就是"未登录 401 / 登录后全功能 + 配置面可写"的完整方案，无需额外通道。
+
+**结论**：公网登录鉴权唯一入口 = `requireSession`（源码级，fail-closed）。远程控制类插件若采用 loopback 代理方案，都会构成 `/api` 鉴权绕过缝，接入前必须评估；本部署已在 profile patch 禁用：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- id: web-ui-remote-web-ui
+  disabled: true
+```
+
+> PowerShell 对应的禁用行同理（patch 层可用 `disabled: true` 覆盖全家桶内建行）。
+
+---
+
+## 八、注意事项与风险
 
 1. **改动属"侵入式"**：落 `connection` 包两处文件，已 fork 官方 master。后续每个上游版本都要 review 这两个文件冲突。
 2. **`sessionAuth` 服务名需插件与源码约定一致**：改名的扩展点会让守卫失效（fail-closed 退化为全拒或放行，取决于实现）。建议固定为 `sessionAuth` 并在 README 中声明。
