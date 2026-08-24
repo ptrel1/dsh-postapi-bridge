@@ -107,6 +107,23 @@ supervisorctl restart dsh-web
 
 ---
 
+## 🔧 为什么需要修改 DSH 源码（而非纯插件）—— 好处
+
+本插件的**登录鉴权**依赖一个源码级扩展点（`client-connection` 的 `requireSession`）。为什么不做成"零侵入"纯插件？因为两种方案的**能力边界完全不同**：
+
+| 维度 | 纯插件（零侵入） | 源码扩展点（`requireSession`） |
+| :--- | :--- | :--- |
+| 能否在 `/api` 前置鉴权 | **不能**（官方无中间件、路由防重复、interceptor 无 request） | **能**：connection 路由 handler 内统一校验 |
+| 覆盖范围 | 只能 gate **自己新开的通道** | 整个 `/api/*`：HTTP RPC + SSE + WebSocket，**fail-closed** |
+| 对直连 `/api`（curl 绕过） | 管不住 | 一律 401/403 |
+| 与官方升级的兼容性 | 天然无冲突 | 需 merge 时 review `client-connection`（增量小、冲突集中） |
+
+**修改源码的好处（对比纯插件远程控制方案）**：
+1. **守住官方唯一的门**：鉴权发生在 `/api` 入口本身，任何客户端（浏览器、curl、脚本、第三方前端）都被同一道门拦截；
+2. **不被通道绕过**：纯插件"远程控制"方案只能把流量引到自己通道再以本机身份代理回 `/api`，本质是可绕过的通道门禁；源码门禁没有这个缝；
+3. **默认关闭、行为不漂移**：`requireSession` 默认 `false`，不开 = 官方原样；开启 = 公网未登录 401，loopback 恒放行；
+4. **配置面随用户登录开放**：登录用户可在公网读写 `settings.*`/`credentials.*`（官方默认 pin loopback），多用户协作不必局限本机。
+
 ## 🆚 与第三方远程控制插件（@linxin666/dsh-remote-web-ui）的区别
 
 - **设备配对 ≠ 用户登录**：`dsh-remote-web-ui` 的"设备配对"只是给**设备**发 cookie，管不住直连官方 `/api` 的请求（官方源码原话："没有插件能做到；`/api` 的围栏是 SDK 自己的接缝"）。
