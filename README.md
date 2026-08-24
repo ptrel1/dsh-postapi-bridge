@@ -5,6 +5,14 @@
 
 ---
 
+## 📦 npm 发布状态
+
+> ✅ **已发布到 npm**：`dsh-postapi-bridge@0.1.0`（dist-tag `latest`）  
+> 📦 安装：`dsh plugin --profile web add dsh-postapi-bridge`  
+> 🔗 查看：[https://www.npmjs.com/package/dsh-postapi-bridge](https://www.npmjs.com/package/dsh-postapi-bridge)
+
+---
+
 ## 🏗️ 前身与历史（承接 `mai_study_code`）
 
 本项目的缘起，与 `maibot_dsh_bridge` 一脉相承，同样承接自早期架构探索原型 —— **`mai_study_code`（麦麦学代码）**。
