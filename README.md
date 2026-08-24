@@ -73,8 +73,21 @@
 
 ## 🚀 安装与挂载
 
+### 方式一：从 npm 安装（推荐，面向大众）
+
 ```bash
-# 挂载到 DSH web profile
+# 一行命令挂载到 DSH web profile
+dsh plugin --profile web add dsh-postapi-bridge
+
+# 重启 DSH 服务生效
+supervisorctl restart dsh-web
+```
+
+> 📦 npm 包名：**`dsh-postapi-bridge`**（公开发布，`dsh plugin add dsh-postapi-bridge` 即可）。
+
+### 方式二：本地源码 Link（开发 / 定制）
+
+```bash
 cd ~/.dsh/profiles/web
 dsh plugin --profile web add link:/main/app/github/dsh-postapi-bridge
 
