@@ -57,9 +57,13 @@ DSH 官方把 `/api/*` 的信任边界**定义在"谁能连到这个服务"（Ho
 - **覆盖全通道**：同时拦截 `/api` 的 HTTP RPC、事件 SSE、WebSocket 下行。
 
 ### 3.2 改动文件
-仅一处：`packages/client/connection/src/index.ts`
 
-### 3.3 具体改动（约 25 行）
+| 文件 | 改动 |
+| :--- | :--- |
+| `packages/client/connection/src/api-request-trust.ts` | 导出 `header()` 与 `parseAuthority()`（供 `index.ts` 判 loopback Host，各加 `export` 关键字） |
+| `packages/client/connection/src/index.ts` | 增加 `requireSession` 配置 + `isAuthenticated` 判定 + 三处接入 |
+
+### 3.3 具体改动
 
 **① 配置项**（`ConnectionConfig` 接口 + `Config` schema 各加一项）：
 
@@ -67,7 +71,8 @@ DSH 官方把 `/api/*` 的信任边界**定义在"谁能连到这个服务"（Ho
 export interface ConnectionConfig {
   trustedHosts?: string[]
   maxRequestBodyBytes?: number
-  /** 开启后，非 loopback 请求必须通过 ctx.get('sessionAuth').isAuthenticated(req) 才放行。默认 false。 */
+  /** 开启后，非 loopback /api 请求（含配置面 settings.*/credentials.*）
+   * 必须通过 ctx.get('sessionAuth').isAuthenticated(...) 才放行。默认 false。 */
   requireSession?: boolean
 }
 
@@ -78,26 +83,57 @@ export const Config: z<ConnectionConfig> = z.object({
 })
 ```
 
-**② 新增鉴权 helper**（放在 `apply` 内）：
+**② 新增 `SessionAuthService` 契约**（`index.ts`，放 `inject` 定义之后）：
 
 ```ts
-const isAuthenticated = (req: IncomingMessage): boolean => {
+/** 可选服务：requireSession 开启时，由插件提供非 loopback /api 的登录判定。 */
+export interface SessionAuthService {
+  /** 只在非 loopback 请求上被调用。实现通过 Cookie 判登录态；无法识别必须返回 false（fail-closed）。 */
+  isAuthenticated(req: IncomingMessage | Request): boolean
+}
+
+export const inject = ['webServer']
+```
+
+> 需要 `import type { IncomingMessage } from 'node:http'`，并从 `./api-request-trust.ts` 导入 `header` / `parseAuthority`，从 `./loopback-hostname.ts` 导入 `isLoopbackHostname`。
+
+**③ 新增鉴权 helper**（放 `apply` 内）：
+
+```ts
+const requireSession = config?.requireSession ?? false
+
+// 归一化 Fetch Request / Node IncomingMessage 的请求头，使插件一致读取 req.headers.cookie
+const nodeRequest = (req: IncomingMessage | Request): IncomingMessage | Request => {
+  if (req instanceof Request) {
+    const headers: Record<string, string> = {}
+    for (const name of ['cookie', 'host']) {
+      const value = req.headers.get(name)
+      if (value !== null) headers[name] = value
+    }
+    return { headers } as IncomingMessage
+  }
+  return req
+}
+
+const isAuthenticated = (req: IncomingMessage | Request): boolean => {
   // 未开启 → 恒放行，保持官方行为
-  if (!config?.requireSession) return true
-  // 本机回环永远放行（supervisor 部署 / 健康检查）
-  const host = new URL(`http://${req.headers.host ?? ''}`).hostname
-  if (isLoopbackHostname(host)) return true
-  // 非回环：必须由已注册的 sessionAuth 服务判定
-  const sessionAuth = ctx.get('sessionAuth') as
-    | { isAuthenticated: (req: IncomingMessage) => boolean }
-    | undefined
-  return sessionAuth?.isAuthenticated(req) ?? false
+  if (!requireSession) return true
+  // 本机回环永远放行（supervisor 部署 / 健康检查）——判定用 Host 头，
+  // 不用 X-Forwarded-For，避免伪造转发头绕过
+  const host = header(req.headers, 'host')
+  if (host !== undefined) {
+    const authority = parseAuthority(host)
+    if (authority !== undefined && isLoopbackHostname(authority.hostname)) return true
+  }
+  // 非回环：必须由已注册的 sessionAuth 服务判定，无服务则 fail-closed。
+  // 注意：必须在请求到达时动态 ctx.get('sessionAuth') 获取，不可在 apply 初始化时静态缓存，
+  // 避免因 Cordis 插件加载顺序差异导致早期缓存为 undefined。
+  const authService = ctx.get('sessionAuth') as SessionAuthService | undefined
+  return authService?.isAuthenticated(nodeRequest(req)) ?? false
 }
 ```
 
-> `ctx.get('sessionAuth')` 是 Cordis 可选服务。`dsh-postapi-bridge` 通过 `ctx.provide('sessionAuth', { isAuthenticated })` 提供实现（见 §4）。
-
-**③ `/api` HTTP 路由**（原 `route` 定义处，在 Host 围栏之后）：
+**④ `/api` HTTP 路由**（原 `route` 定义处，在 Host 围栏之后）：
 
 ```ts
 const route: WebRoute = {
@@ -115,7 +151,17 @@ const route: WebRoute = {
 }
 ```
 
-**④ WebSocket 下行**（`registerDownlink` 的 handler 内，Host 围栏之后）：
+**⑤ 特权方法（配置面）fetch 分支**——唯一一行改动，让公网 Host 在开启 `requireSession` 后可达配置面：
+
+```ts
+// 原：&& !isTrustedApiRequest(request, [])          // 空数组 → 永远 loopback-only
+// 改：
+&& !isTrustedApiRequest(request, requireSession ? trustedHosts : [])
+```
+
+> 登录校验由 ④ 的 route.handler 完成（`/api` 唯一入口），fetch 分支只负责把配置面的 Host 围栏从"纯 loopback"放宽到"trustedHosts 或 loopback"。`requireSession=false` 时仍是 `[]`，与官方行为完全一致。
+
+**⑥ WebSocket 下行**（`registerDownlink` 的 handler 内，Host 围栏之后）：
 
 ```ts
 handler: (req, socket, head) => {
@@ -125,45 +171,76 @@ handler: (req, socket, head) => {
 }
 ```
 
-> 需要把 `IncomingMessage` 类型 import 进来（`import type { IncomingMessage } from 'node:http'`）。
-
 ### 3.4 验证
 ```bash
-# 开启 requireSession 前：公网未登录可访问 → 200
-# 开启后：
-curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/session.create \
-  -H "Host: dsh.ptrel.cc.cd" -H "Content-Type: application/json" \
-  -d '{"rpcId":"t1","method":"session.create","payload":{}}'          # → 401
-# 本机 loopback：
-curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/session.create \
-  -H "Host: 127.0.0.1:3080" -H "Content-Type: application/json" \
-  -d '{"rpcId":"t1","method":"session.create","payload":{}}'          # → 200
+# requireSession=false（默认）：配置面仍公网 403，官方行为不变
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/settings.describe \
+  -H "Host: dsh.example.com" -H "Content-Type: application/json" -d '{}'   # → 403
+
+# requireSession=true + 未登录：公网拒绝
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/settings.describe \
+  -H "Host: dsh.example.com" -H "Content-Type: application/json" -d '{}'   # → 401
+
+# requireSession=true + 登录 Cookie：配置面放行
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/settings.describe \
+  -H "Host: dsh.example.com" -b "dsh_postapi_session=<登录后的签名 Cookie>" \
+  -H "Content-Type: application/json" -d '{}'                             # → 200/RPC 应答
+
+# 本机 loopback：恒放行
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:3080/api/settings.describe \
+  -H "Host: 127.0.0.1:3080" -H "Content-Type: application/json" -d '{}'   # → 200/RPC 应答
 ```
 
 ---
 
 ## 四、兼容性设计（默认 dsh ↔ 修改后 dsh）
 
-- **不开启 `requireSession`**：修改后的 DSH 行为与官方**完全一致**（单用户、Host 围栏、无登录）。本改动对官方用户零感知。
+- **不开启 `requireSession`**：修改后的 DSH 行为与官方**完全一致**（单用户、Host 围栏、无登录，配置面仍 loopback-only）。本改动对官方用户零感知。
 - **开启 `requireSession`**：需要同时挂载 `dsh-postapi-bridge`（提供 `sessionAuth`），否则公网请求全部 401（fail-closed），仅本机 loopback 可用。
-- **判定依据是 Host 头，而非 `x-forwarded-for`**：避免攻击者伪造 `X-Forwarded-For: 127.0.0.1` 绕过鉴权。公网经 nginx/frp 转发后 Host 为 `dsh.ptrel.cc.cd`（非 loopback），走登录校验。
+- **判定依据是 Host 头，而非 `x-forwarded-for`**：避免攻击者伪造 `X-Forwarded-For: 127.0.0.1` 绕过鉴权。公网经 nginx/frp 转发后 Host 为公网域名如 `dsh.example.com`（非 loopback），走登录校验。
+
+### 4.1 配置面（`settings.*` / `credentials.*`）公网可用
+
+开启 `requireSession` 并登录后，以下**原本公网一律 403 的特权方法**在公网可达（可读可改）：
+
+- `settings.describe` / `openDocument` / `update` / `replace` / `mutate`
+- `credentials.describe` / `set` / `unset`
+- `host.pickDirectory` / `openPath`
+- `agentPreset.read` / `copy` / `openDocument` / `remove`
+- `llm.discoverModels`
+
+原理：`PRIVILEGED_METHODS` 的 fetch 分支由 `isTrustedApiRequest(request, [])` 改为 `requireSession ? trustedHosts : []`——关闭时仍是 `[]`（loopback-only），开启时公网 Host 可达；登录校验由 route.handler 统一完成（`/api` 唯一入口），未登录的配置面请求在到达 fetch 分支前已被 401 拦截。模型目录（`llm.providers` / `llm.models`）本就公网可达（无密钥状态），不受影响。
 
 ---
 
 ## 五、插件侧配合：`dsh-postapi-bridge` 提供 `sessionAuth`
 
-在 `dsh-postapi-bridge/lib/index.js` 的 `apply` 内（已有 `getAuthUser`）增加：
+在 `dsh-postapi-bridge/lib/index.js` 的 `apply` 内（`ctx.provide(ACTIVATION_SERVICE, ...)` 之后）增加：
 
 ```js
+// 提供 DSH 源码级扩展点：client-connection 开启 requireSession 后，非
+// loopback 的 /api 请求（含配置面 settings.*/credentials.*）都会调用本
+// 服务判定登录态。判定依据是 Cookie 中的会话签名，不依赖 IP——DSH 侧
+// 已用 Host 头判定 loopback 并恒放行，能走到这里的请求必然非回环，若
+// 再判 X-Forwarded-For 反而会被伪造头绕过。
 ctx.provide('sessionAuth', {
   isAuthenticated: (req) => {
-    if (isLoopbackRequest(req)) return true
-    return !!getAuthUser(req)
+    const authHeader = req?.headers?.authorization || (typeof req?.headers?.get === 'function' ? req.headers.get('authorization') : undefined)
+    if (apiToken && authHeader === `Bearer ${apiToken}`) return true
+    const sid = readSessionId(req, secret, cookieName)
+    if (!sid) return false
+    // 每次鉴权重新 load 以获取最新的 sessions.json（避免跨进程/热重载写入未同步）
+    sessionsStore.load()
+    const session = sessionsStore.get(sid)
+    if (!session) return false
+    store.load()
+    const user = store.get(session.username)
+    return !!(user && user.enabled)
   },
 })
 ```
 
-`getAuthUser` 校验签名 Cookie（`dsh_postapi_session`）并返回当前用户；未登录返回 `undefined`。这样源码扩展点拿到实现，公网未登录即被拒。
+`getAuthUser(req)` 校验签名 Cookie（`dsh_postapi_session`）并返回当前用户；未登录返回 `undefined`。这样源码扩展点拿到实现：公网未登录的 `/api` 请求（含 `settings.describe`、`settings.update` 等配置面）即被拒（401），登录后放行。
 
 ---
 
@@ -176,11 +253,11 @@ gitea   ssh://a1@127.0.0.1:2222/ptrel/deepseek-harness.git # 本地备份（可�
 ```
 
 ### 6.2 本地改动提交
-- 本改动只落 `packages/client/connection/src/index.ts` 一处。
+- 改动落 `packages/client/connection/src/index.ts`（配置 + helper + 三处接入）与 `packages/client/connection/src/api-request-trust.ts`（导出 `header`/`parseAuthority`）两处。
 - 提交信息建议遵循 Conventional Commits：`feat(connection): add requireSession login guard extension point`。
 - **严禁推送到 `origin`（官方仓库）**；只提交到本地并推 `gitea` 备份：
   ```bash
-  git add packages/client/connection/src/index.ts
+  git add packages/client/connection/src/index.ts packages/client/connection/src/api-request-trust.ts
   git commit -m "feat(connection): add requireSession login guard extension point"
   git push gitea master
   ```
@@ -194,8 +271,8 @@ git fetch origin
 
 # 2. 方式一（推荐）：rebase 本地改动到官方最新基线，历史线性、冲突最易解
 git rebase origin/master
-# 若冲突：仅 connection/src/index.ts 一处可能冲突，手动解决后：
-#   git add packages/client/connection/src/index.ts
+# 若冲突：仅 connection 的两处可能冲突，手动解决后：
+#   git add packages/client/connection/src/index.ts packages/client/connection/src/api-request-trust.ts
 #   git rebase --continue
 
 # 方式二：merge 合并
@@ -205,11 +282,12 @@ git merge origin/master
 **冲突处理要点**：
 - 上游若改动了 `client-connection` 的 `/api` 路由或 WebSocket downlink，需要把我们的 `isAuthenticated` 判断**重新套到新代码上**（保留扩展点，不丢逻辑）；
 - 上游若改动 `ConnectionConfig` / `Config` schema，需要把 `requireSession` 字段**重新追加**；
-- 冲突解决后务必：`pnpm install && pnpm run build` + `supervisorctl restart dsh-web`，并重新跑 §2.4 验证（未登录 401 / loopback 200）。
+- 上游若改动 `api-request-trust.ts`，可能覆盖 `header` / `parseAuthority` 的 `export`（上游可能仍是私有的），冲突后重新加 `export` 即可；
+- 冲突解决后务必：`pnpm install && pnpm run build` + `supervisorctl restart dsh-web`，并重新跑 §3.4 验证（公网未登录 401 / 登录后放行配置面 / loopback 恒放行）。
 
 ### 6.4 升级后回归清单
-1. 默认未开启 `requireSession` 时，官方功能不受影响；
-2. 开启后：公网未登录 401、登录后 200、loopback 200；
+1. 默认未开启 `requireSession` 时，官方功能不受影响，配置面仍 loopback-only；
+2. 开启后：公网未登录 401、登录后配置面可读可改、loopback 200；
 3. 管理面板（`/admin/server-auth/users`）登录态正常；
 4. `dsh-web` 日志无新增 error。
 
@@ -217,8 +295,9 @@ git merge origin/master
 
 ## 七、注意事项与风险
 
-1. **改动属"侵入式"**：仅此一处，但已 fork 官方 master。后续每个上游版本都要 review 此文件冲突。
+1. **改动属"侵入式"**：落 `connection` 包两处文件，已 fork 官方 master。后续每个上游版本都要 review 这两个文件冲突。
 2. **`sessionAuth` 服务名需插件与源码约定一致**：改名的扩展点会让守卫失效（fail-closed 退化为全拒或放行，取决于实现）。建议固定为 `sessionAuth` 并在 README 中声明。
 3. **本机 loopback 恒放行**：意味着"能直连 127.0.0.1:3080 的人（本机进程）"可免登录。公网隔离由 frp/nginx 保证，请勿把 3080 直接暴露公网。
 4. **WS/SSE 已被拦截**：未登录无法建立事件通道，杜绝实时流信息泄露。
-5. **建议在 `skill/memory.md` 记录每次升级的冲突处理结果**，方便追溯。
+5. **配置面公网开放 = 完全信任登录用户**：登录用户可读写全部配置（含 API Key、agent preset、凭据引用）。这是把整个配置面交给了账号体系——务必确认账号体系本身安全（强密码、无默认弱口令）。
+6. **建议在 `skill/memory.md` 记录每次升级的冲突处理结果**，方便追溯。
