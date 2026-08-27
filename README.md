@@ -7,7 +7,8 @@
 
 ## 📦 npm 发布状态
 
-> ✅ **已发布到 npm**：`dsh-postapi-bridge@0.1.0`（dist-tag `latest`）  
+> ✅ **已发布到 npm**：`dsh-postapi-bridge@0.1.1`（dist-tag `latest`）  
+> ⚠️ **0.1.1 起含 `sessionAuth` 服务接线**（对接 DSH `requireSession` 门禁扩展点）。曾发布的 **0.1.0 缺少该接线**——若 profile 以 `"*"` 依赖声明重装拉到旧版，会导致公网 API 全部 403/401（fail-closed），务必升到 0.1.1+。  
 > 📦 安装：`dsh plugin --profile web add dsh-postapi-bridge`  
 > 🔗 查看：[https://www.npmjs.com/package/dsh-postapi-bridge](https://www.npmjs.com/package/dsh-postapi-bridge)
 
