@@ -80,6 +80,29 @@
 | `/api/dsh/v1/task` | `POST` | Bearer Token | 调度 DSH 核心引擎派发 Agent 任务 |
 | `/api/dsh/v1/mcp/tool`| `POST` | Bearer Token | 直接调用 DSH 工具（如 `bash`, `read`） |
 
+### 溯源审计（v0.3.0）
+
+**功能**：为网关的每一笔请求（`/api/dsh/v1/*`，含 `/task`）固化成一条溯源记录，用于回答「谁、从哪、走什么通道、调用哪个接口/插件下发了任务」。
+
+**落册两条**：
+- `ctx.logger`：进程日志中以 `[postapi-audit]` 前缀输出（DSH supervisor 的 `dsh-web.log` / `dsh-rescue.log` 可见）；
+- `data/access-log.jsonl`：插件数据目录下的 JSON Lines 文件（默认 `插件目录/data/`，超 5MB 自动轮转保留 3 份 `.1/.2/.3`）。
+
+**记录四要素**：
+| 要素 | 字段 | 来源 |
+| :--- | :--- | :--- |
+| 来源 IP | `ip` / `xff` / `loopback` | 直连 IP + `X-Forwarded-For` 全链 + 是否回环 |
+| 域名入口 | `host` / `xForwardedHost` / `xForwardedProto` | `Host` 头与转发头 |
+| 通道 | `channel` / `channelVia` | `X-DSH-Channel` 头 → `config.channels` / `DSH_GATEWAY_CHANNELS` 的 token↔通道映射 → UA 推断 → `unknown` |
+| 调用方 | `caller` / `ua` | token 指纹（SHA256 前 8 位，明文 token 不落盘）+ User-Agent |
+
+**配置**：
+- `config.channels`：`{ "<token>": "通道名", ... }`（把 maibot 的网关 token 映射为 `maibot`，通道一眼可辨）；
+- `DSH_GATEWAY_CHANNELS`：环境变量 JSON，格式同上（默认层，低于 `config.channels`）；
+- `config.accessLogDir`：自定义审计日志目录（默认插件 `data/`）。
+
+**生效**：改完重启 DSH（`supervisorctl restart dsh-web`），`/api/dsh/v1/health` 返回 `"audited": true` 作为启用标记。
+
 ---
 
 ## 🚀 安装与挂载
