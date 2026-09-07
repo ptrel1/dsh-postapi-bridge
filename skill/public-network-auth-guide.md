@@ -1,5 +1,25 @@
 # 给 AI 的决策指导：DSH 公网账号系统（源码级扩展点）
 
+> ⚠️ **20260907 重大更新：dsh ≥ 0.1.2 起本文「改源码」路线已废弃**
+>
+> 上游 0.1.2（tag `dsh-v0.1.2-alpha.1`）已内置原生 **BrowserAuth**（`packages/client/connection/src/browser-auth.ts`）：
+> 启动日志打印 `dsh web: http://...?token=...` 一次性入口 → 首访 303 铸 HMAC 签名 cookie
+> （authority 绑定 + maxAgeDays 过期，secret 持久化于 credential store，**跨重启有效**），
+> `/api/*` 与 index 均在门禁内（`requestRejection`：403=Host 不可信，401=无有效 cookie）。
+>
+> **新决策路径（0.1.2+）**：
+> - 公网鉴权 → **零源码补丁**，直接用原生 BrowserAuth；
+> - 用户要"密码登录页"体验 → 用 `dsh-postapi-bridge` 的 `/login`（密码通过后自动从
+>   supervisor 日志解析最新 token 并 302 跳转铸 cookie，见 lib/index.js `resolveLatestLaunchToken`）；
+> - 高危操作 step-up 二次验证 → 无原生等价物，仍由 postapi 层提供；
+> - 插件宿主侧驱动会话 → 不再有 `apiProxy`，改 `ctx.agents.get/create` + `handle.agent.followup`
+>   （范式：官方 `packages/webhook/webhook/src/session.ts`）。
+> - fork 纪律：**零源码补丁**，扩展一律走插件 + 官方扩展点
+>   （`ctx.connection.rpc.intercept('/api',...)` / `connection.fetch.register`）。
+>
+> ---
+> 以下为 **dsh ≤ 0.1.1 旧版**的 requireSession 源码扩展点指导，仅作历史存档：
+
 > 本文是给 **AI（代码智能体）** 的决策与修改指导，用于处理用户提出「DSH 账号 / 登录 / 多用户 / 权限」相关需求时，**先正确判断部署场景**，再决定是否需要修改 DSH 源码。
 >
 > 关联插件：`dsh-postapi-bridge`（登录 / 多账号 / 管理面板）。

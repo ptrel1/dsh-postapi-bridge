@@ -55,13 +55,21 @@
 
 ---
 
-## 🔐 公网账号系统与 DSH 源码扩展点（重要）
+## 🔐 公网账号系统与 DSH 鉴权（20260907 更新：0.1.2 原生 BrowserAuth 时代）
 
-本插件保护的是「登录页 + 管理 API + 机器通道」，**无法保护官方 `/api/*` 核心 RPC**。DSH 官方把 `/api/*` 的信任边界定义在"谁能连到服务"（Host 头）而非"是否登录"，且 webserver **无中间件、路由防重复、RPC interceptor 拿不到 request**——纯插件无法在 `/api` 前置登录校验。
+**dsh ≥ 0.1.2：`/api/*` 鉴权主力已原生内置（BrowserAuth），不再需要任何源码补丁。**
+- 门禁：无 cookie 401 / Host 不可信 403；一次性 `?token=` 入口 URL 铸签名 cookie（30 天，跨重启有效）。
+- **登录体验**：本插件 `/login`（账号密码）登录成功后自动解析 supervisor 日志最新启动 token
+  并 302 跳转铸原生 cookie——用户只需记 `/login` + 密码，重启换 token 无感。
+- 高危 step-up 二次验证、多账号、审计：仍由本插件提供（无原生等价物）。
+- ⚠️ **0.1.2 起 `apiProxy` 服务已被上游移除**：插件 `inject` 不再含 `apiProxy`，
+  `/task` 会话驱动改 `ctx.agents.get/create` + `handle.agent.followup`（不兼容 dsh < 0.1.2）。
 
-因此，公网场景要实现「未登录禁止调用任何 DSH 核心功能」（发消息、执行命令、读写配置等），必须：
-1. **修改 DSH 源码**：在 `packages/client/connection/src/index.ts` 增加**默认关闭**的 `requireSession` 扩展点（不开启时与官方单用户行为完全一致；配套 `api-request-trust.ts` 导出两个内部函数）；
-2. **本插件提供实现**：`ctx.provide('sessionAuth', { isAuthenticated })` 返回鉴权判定。
+<details><summary>历史方案（dsh ≤ 0.1.1 requireSession 源码扩展点，已废弃）</summary>
+
+旧版公网场景要保护官方 `/api/*` 必须改 DSH 源码：在 `packages/client/connection/src/index.ts` 增加
+默认关闭的 `requireSession` 扩展点 + 插件 `ctx.provide('sessionAuth', { isAuthenticated })`。
+详见 `skill/public-network-auth-guide.md` 存档部分。</details>
 
 > **配置面（settings.* / credentials.*）公网可用**：开启 `requireSession` 并登录后，原本公网一律 403 的配置面（读配置、改配置、凭据管理、原生对话框、agent preset 管理、模型发现）在公网可访问与修改——登录校验由 DSH 侧统一完成，未登录仍被 401 拦截。
 

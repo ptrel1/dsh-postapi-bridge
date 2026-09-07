@@ -6,8 +6,8 @@
 import assert from 'node:assert'
 import { SessionsStore } from '../lib/users-store.js'
 
-const mockReq = ({ ip, ua, xff }) => ({
-  headers: { 'user-agent': ua, 'x-forwarded-for': xff },
+const mockReq = ({ ip, ua, xff, host }) => ({
+  headers: { 'user-agent': ua, 'x-forwarded-for': xff, host: host || 'dsh.ptrel.cc.cd' },
   socket: { remoteAddress: ip },
 })
 
@@ -44,9 +44,13 @@ assert.equal(v3.ok, true); assert.equal(v3.reason, 'whitelist')
 assert.equal(cidrMatch('192.168.1.100', '192.168.0.0/16'), true)
 assert.equal(cidrMatch('192.169.1.100', '192.168.0.0/16'), false)
 
-// --- loopback 恒放行 ---
-const v4 = verifyFingerprint(mockReq({ ip: '127.0.0.1', ua: 'x', xff: '' }), session, [], 24)
+// --- loopback 恒放行(socket 与 Host 双回环) ---
+const v4 = verifyFingerprint(mockReq({ ip: '127.0.0.1', ua: 'x', xff: '', host: '127.0.0.1:3080' }), session, [], 24)
 assert.equal(v4.ok, true); assert.equal(v4.reason, 'loopback')
+
+// --- 审查修复回归: socket 回环但 Host 公网(frp直连 IP:53080) → 不得放行 ---
+const v4b = verifyFingerprint(mockReq({ ip: '127.0.0.1', ua: 'Mozilla/5.0', xff: '', host: '47.98.244.173:53080' }), session, [], 24)
+assert.equal(v4b.ok, false, 'frp直连伪回环必须拦截')
 
 // --- legacy 无指纹会话 fail-closed ---
 const v5 = verifyFingerprint(stolen, { username: 'ptrel' }, [], 24)
