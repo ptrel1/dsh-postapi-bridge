@@ -1,16 +1,39 @@
 # dsh-postapi-bridge 🚪🔐
 
-> **DeepSeek Harness (DSH) 官方标准双半侧统一网关与鉴权桥梁插件**  
+> **DeepSeek Harness (DSH) 双半侧统一网关与鉴权桥梁插件**
 > 融合 **人类端多用户安全登录** + **机器端轻量 HTTP POST / RESTful API 调度网关**。
 
 ---
 
 ## 📦 npm 发布状态
 
-> ✅ **已发布到 npm**：`dsh-postapi-bridge@0.1.1`（dist-tag `latest`）  
-> ⚠️ **0.1.1 起含 `sessionAuth` 服务接线**（对接 DSH `requireSession` 门禁扩展点）。曾发布的 **0.1.0 缺少该接线**——若 profile 以 `"*"` 依赖声明重装拉到旧版，会导致公网 API 全部 403/401（fail-closed），务必升到 0.1.1+。  
-> 📦 安装：`dsh plugin --profile web add dsh-postapi-bridge`  
-> 🔗 查看：[https://www.npmjs.com/package/dsh-postapi-bridge](https://www.npmjs.com/package/dsh-postapi-bridge)
+> ⚠️ **npm 上的版本已滞后**：registry 上最新为 **`0.1.0`**，而本仓库当前已是 **`0.6.6`**。
+> **请勿以 npm 版本为准**——`0.1.0` 缺少 `sessionAuth` 服务接线（对接 DSH `requireSession` 门禁扩展点），
+> 会导致公网 API 全部 403/401（fail-closed）。
+>
+> ✅ **推荐安装方式：从本仓库源码安装**
+> ```bash
+> dsh plugin --profile web add git+https://github.com/ptrel1/dsh-postapi-bridge.git
+> ```
+> 🔗 npm 页面（版本较旧，仅供参考）：[https://www.npmjs.com/package/dsh-postapi-bridge](https://www.npmjs.com/package/dsh-postapi-bridge)
+
+---
+
+## 版本记录 v0.6.4（20260902，机器通道安全加固·PLAN-SEC02 P1-急）
+
+- **机器通道 fail-closed**：/api/dsh/v1/* 非本地(严格双回环之外)请求一律要求 Bearer/X-Gateway-Token；
+  apiToken 为空也拒绝——杜绝「token 未配 → 全网可 RCE」的 fail-open。
+- **严格回环判定 isStrictLoopback**：socket+Host 双回环，绝不经 X-Forwarded-For
+  —— 伪造 XFF:127.0.0.1 与 frp 直连(socket=127,Host=公网)均无法蒙混免 token；
+  verifyFingerprint / handleApiBridge / handleAdminUsers 三处统一。
+- **/health 白名单免 token**：健康探测不要求凭据，其它机器通道方法一律 401。
+- package.json 与 AUDIT_VERSION 对齐 0.6.4。
+
+## 版本记录 v0.6.3（20260902，网关鉴权体验/误杀缓解）
+
+- 会话指纹放宽：UA 只绑定设备类别(desktop/mobile/tablet/other)而非逐字节哈希，桌面/手机切换不再误杀；旧会话回退 UA 哈希硬匹配。ipPrefixBits 默认 24→16。
+- 未登录自动跳登录页：浏览器半侧包装全局 fetch 捕获 /api 401/403，仅无会话 cookie 且在登录页外时跳 /login；stepup 场景不狂跳。
+- package.json 与 AUDIT_VERSION 对齐 0.6.3。
 
 ---
 
@@ -55,21 +78,13 @@
 
 ---
 
-## 🔐 公网账号系统与 DSH 鉴权（20260907 更新：0.1.2 原生 BrowserAuth 时代）
+## 🔐 公网账号系统与 DSH 源码扩展点（重要）
 
-**dsh ≥ 0.1.2：`/api/*` 鉴权主力已原生内置（BrowserAuth），不再需要任何源码补丁。**
-- 门禁：无 cookie 401 / Host 不可信 403；一次性 `?token=` 入口 URL 铸签名 cookie（30 天，跨重启有效）。
-- **登录体验**：本插件 `/login`（账号密码）登录成功后自动解析 supervisor 日志最新启动 token
-  并 302 跳转铸原生 cookie——用户只需记 `/login` + 密码，重启换 token 无感。
-- 高危 step-up 二次验证、多账号、审计：仍由本插件提供（无原生等价物）。
-- ⚠️ **0.1.2 起 `apiProxy` 服务已被上游移除**：插件 `inject` 不再含 `apiProxy`，
-  `/task` 会话驱动改 `ctx.agents.get/create` + `handle.agent.followup`（不兼容 dsh < 0.1.2）。
+本插件保护的是「登录页 + 管理 API + 机器通道」，**无法保护官方 `/api/*` 核心 RPC**。DSH 官方把 `/api/*` 的信任边界定义在"谁能连到服务"（Host 头）而非"是否登录"，且 webserver **无中间件、路由防重复、RPC interceptor 拿不到 request**——纯插件无法在 `/api` 前置登录校验。
 
-<details><summary>历史方案（dsh ≤ 0.1.1 requireSession 源码扩展点，已废弃）</summary>
-
-旧版公网场景要保护官方 `/api/*` 必须改 DSH 源码：在 `packages/client/connection/src/index.ts` 增加
-默认关闭的 `requireSession` 扩展点 + 插件 `ctx.provide('sessionAuth', { isAuthenticated })`。
-详见 `skill/public-network-auth-guide.md` 存档部分。</details>
+因此，公网场景要实现「未登录禁止调用任何 DSH 核心功能」（发消息、执行命令、读写配置等），必须：
+1. **修改 DSH 源码**：在 `packages/client/connection/src/index.ts` 增加**默认关闭**的 `requireSession` 扩展点（不开启时与官方单用户行为完全一致；配套 `api-request-trust.ts` 导出两个内部函数）；
+2. **本插件提供实现**：`ctx.provide('sessionAuth', { isAuthenticated })` 返回鉴权判定。
 
 > **配置面（settings.* / credentials.*）公网可用**：开启 `requireSession` 并登录后，原本公网一律 403 的配置面（读配置、改配置、凭据管理、原生对话框、agent preset 管理、模型发现）在公网可访问与修改——登录校验由 DSH 侧统一完成，未登录仍被 401 拦截。
 
@@ -115,17 +130,19 @@
 
 ## 🚀 安装与挂载
 
-### 方式一：从 npm 安装（推荐，面向大众）
+### 方式一：从 GitHub 源码安装（推荐）
 
 ```bash
 # 一行命令挂载到 DSH web profile
-dsh plugin --profile web add dsh-postapi-bridge
+dsh plugin --profile web add git+https://github.com/ptrel1/dsh-postapi-bridge.git
 
 # 重启 DSH 服务生效
 supervisorctl restart dsh-web
 ```
 
-> 📦 npm 包名：**`dsh-postapi-bridge`**（公开发布，`dsh plugin add dsh-postapi-bridge` 即可）。
+> 📦 本仓库为当前维护源（最新 `0.6.6`）。
+> ⚠️ npm registry 上的 `dsh-postapi-bridge` 停留在 `0.1.0`（缺少 `sessionAuth` 接线，会导致公网 API 403/401），
+> **不建议**用 `dsh plugin add dsh-postapi-bridge` 安装。
 
 ### 方式二：本地源码 Link（开发 / 定制）
 
