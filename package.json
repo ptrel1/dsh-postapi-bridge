@@ -1,6 +1,6 @@
 {
   "name": "dsh-postapi-bridge",
-  "version": "0.6.7",
+  "version": "0.7.0",
   "description": "DeepSeek Harness (DSH) 统一网关与鉴权桥梁插件：为外部系统与机器人提供开箱即用的 HTTP POST / RESTful API 网关，同时提供 Web 多账号安全认证与用户管理。",
   "type": "module",
   "main": "lib/index.js",
@@ -40,14 +40,19 @@
       ],
       "platform": "web",
       "immediately": true
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.2": "compatible"
+      }
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/cordis-plugin-loader": "^4.0.1"
+    "@deepseek-ai/cordis": "^4.0.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
   },
   "repository": {
     "type": "git",

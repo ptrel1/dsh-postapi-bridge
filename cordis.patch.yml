@@ -1,8 +1,13 @@
 # dsh-postapi-bridge 默认 patch 配置
-# 禁用官方默认可能冲突的 webauth，插入 postapi-bridge 服务
-- id: webauth
-  disabled: true
-
+# 注入 postapi-bridge 服务。
+#
+# 历史（20261021 修正）：此处原有一条 `- id: webauth / disabled: true`，
+# 用于禁用宿主默认的 webauth 插件以免冲突。但自 dsh 0.2.x 起宿主已无 id 为
+# `webauth` 的 entry（装配树中不存在），该补丁成为空挂，每次启动都会报
+#   dsh: [dsh-postapi-bridge] patch: entry "webauth" not found
+# 属无效补丁，故移除。
+#
+# 注意：若将来宿主重新引入同名 entry 且与本插件冲突，需按实际 entry id 重新添加。
 - insert:
     - id: dsh-postapi-bridge
       name: dsh-postapi-bridge
