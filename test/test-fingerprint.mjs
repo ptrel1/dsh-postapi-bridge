@@ -69,3 +69,46 @@ store.recordMismatch('sid-y'); store.resetMismatch('sid-y')
 assert.equal(store.get('sid-y').mismatchCount, undefined)
 
 console.log('P0 fingerprint tests: ALL PASS')
+
+// ==================== v1.9.4：伪回环判定不许误伤正常反代 ====================
+//
+// 背景（20261104 实踩）：frp / nginx 这类正常反向代理，socket 恒为回环、
+// Host 恒为域名，但**带着可信 XFF**。旧代码只看「socket 回环 + Host 非回环」
+// 就判成伪回环，于是一刀 deny —— 连「UA 类别对、仅哈希变了」也拒。
+// 后果：App 改一次 UA 字符串，所有走 frp 的用户全部登录失效。
+//
+// 判据是「有没有可信 XFF」：有 → 真实 IP 可判，按正常逻辑走；
+// 无 → 才是真的借道回环端口，保持 deny。
+
+const uaNow = 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36 DSH-PostAPI-Android'
+const uaOld = 'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36 DSH-PostAPI-Android/0.1'
+// 会话：同 IP 段、类别 mobile、哈希是旧 UA
+const frpSession = {
+  bindIpPrefix: ipPrefixOf('36.21.129.243', 24),
+  bindUaHash: uaHashOf(uaOld),
+  bindUaClass: 'mobile',
+}
+
+// ① 正常 frp 代理 + UA 哈希漂移 → 必须放行（ua-hash-drift），不能 deny
+const frpReq = mockReq({ ip: '127.0.0.1', ua: uaNow, xff: '36.21.129.243' })
+const vFrp = verifyFingerprint(frpReq, frpSession, [], 24, undefined, 'allow')
+assert.equal(vFrp.ok, true, '正常 frp 代理下 UA 哈希漂移应放行，实际 reason=' + vFrp.reason)
+assert.equal(vFrp.reason, 'ua-hash-drift')
+
+// ② 真伪回环（无 XFF，借道回环端口）→ 仍须拒绝
+//    这是原设计的防线，不能被上面的修正削弱
+const fakeReq = {
+  headers: { 'user-agent': uaNow, host: 'dsh.ptrel.cc.cd' },
+  socket: { remoteAddress: '127.0.0.1' },
+}
+const vFake = verifyFingerprint(fakeReq, frpSession, [], 24, undefined, 'allow')
+assert.equal(vFake.ok, false, '无 XFF 的伪回环必须拒绝')
+assert.equal(vFake.reason, 'ip-denied')
+
+// ③ 正常 frp + 类别不匹配（真的盗用）→ 仍须 mismatch 并计数
+const stolenUA = mockReq({ ip: '127.0.0.1', ua: 'Python-urllib/3.10', xff: '36.21.129.243' })
+const vStolen = verifyFingerprint(stolenUA, frpSession, [], 24, undefined, 'allow')
+assert.equal(vStolen.ok, false, '类别不匹配仍须拒绝')
+assert.equal(vStolen.reason, 'mismatch')
+
+console.log('fingerprint: all assertions passed')
