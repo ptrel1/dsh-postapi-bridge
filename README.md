@@ -2121,3 +2121,47 @@ supervisorctl restart dsh-web
 ```
 
 - 详细架构对比见 🔒 `skill/public-network-auth-guide.md` §七。
+
+
+## 🔗 相关项目（参考实现）
+
+> 本插件的**客户端侧**（Android App）在设计时参考了下列成熟实现。
+> 记录在此是为了留下回查路径 —— 参考 ≠ 照搬，写清来源也是给自己留证据。
+
+### SimpleChat（Pokanshuu/Simple-Chat）
+
+| 项 | 内容 |
+| :--- | :--- |
+| **地址** | https://github.com/Pokanshuu/Simple-Chat |
+| **许可** | **MIT** —— 可商用、可修改、可分发，需保留版权声明 |
+| **它是什么** | 轻量原生 Android AI 对话客户端（Jetpack Compose），接任意 OpenAI 兼容端点，数据全本地 |
+| **规模** | 32,077 行 Kotlin（165 文件），release 经 R8 后约 3.7 MB |
+
+**与本插件的交集**
+
+它**不依赖**本插件，是独立产品。我们参考的是它的**客户端实现经验**：
+
+- **流式滚动锚点**：聊天列表必须顶部为原点（否则流式消息在底边长高会把已显示内容整体上顶，实测 0.5 秒滑走 861px）
+- **跟底策略**：不要每帧跳到底，改成每帧吃掉剩余距离的 0.7 才连续
+- **流式 Markdown 切块**：整篇重解析是流式掉帧的根源，按空行切块后解析量从 O(全文) 降到 O(尾块)
+- **输入法拉起**：`requestFocus()` 不会拉起键盘，必须 `show()` 且等一帧
+- **浮层输入栏**：输入栏盖在列表上时必须给列表留 `contentPadding`，否则最后一条滚不出来
+
+**可直接移植的模块（零 Compose 依赖，纯 Kotlin）**
+
+`MarkdownBlockSplitter` / `HtmlNormalize` / `MathSplit` / `SoftBreaks` /
+`SseLineParser` / `TextChunks` / `ContinuePolicy`（共约 1051 行）
+
+**架构上值得沿用的分层**
+
+```
+UI → ViewModel → Api 门面 → SSE
+                    ↓
+            StreamEvent（sealed interface）
+```
+
+UI 只依赖事件抽象，换后端只需换 Api 实现 —— 本插件的 Android 客户端接
+`/chat/stream` 时沿用了同样的分层。
+
+---
+
